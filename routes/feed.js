@@ -3,50 +3,29 @@
  */
 var express = require('express');
 var request = require('request');
+var RateLimiter = require('limiter').RateLimiter;
 var Q = require('q');
 var router = express.Router();
 
 /* GET feed */
 router.get('/:feedNum', function (req, res, next) {
     var feedNum = req.params.feedNum;
+    var offset = 0;
     console.log(feedNum);
-
-    Q.when(null)
-        .then(function () {
-            var deferred = Q.defer();
-
-            var rst = [];
-            for (var sec = 0; sec < Math.ceil(feedNum / 9); sec++)
-            {
-                var timeDelay = 2000 * sec;
-                var offset = sec * 9;
-                setTimeout(loadEtsyFeed, timeDelay, offset, res, function (err, listings) {
-                    if (err)
-                    {
-                        console.log(err.message);
-                    }
-                    else {
-                        rst = rst.concat(listings);
-                        if (rst.length >= feedNum) {
-                            deferred.resolve(rst);
-                        }
-                    }
-                });
-            }
-
-            return deferred.promise;
-        })
-        .then(function (listings) {
-            res.end(JSON.stringify({count: listings.length, results: listings}));
-        })
-        .catch(function (err) {
+    var apiKey = '9fvuooi2ro6lugj1f554tw68';
+    loadEtsyFeed(apiKey, feedNum, offset, function (err, data) {
+        if (err) {
             console.log(err.message);
-        })
-        .done();
+        }
+        else {
+            res.send({count: data.length, results: data})
+        }
+    });
 
 });
 
-function loadEtsyFeed (offset, res, cb){
+function loadEtsyFeed(apiKey, limit, offset, cb) {
+    var limiter = new RateLimiter(1, 150);
     var listings = [];
     Q.when(null)
         .then(function () {
@@ -55,13 +34,13 @@ function loadEtsyFeed (offset, res, cb){
             var reqConfig = {
                 url: 'https://openapi.etsy.com/v2/listings/active',
                 qs: {
-                    api_key: '9fvuooi2ro6lugj1f554tw68',
-                    limit: 9,
+                    api_key: apiKey,
+                    limit: limit,
                     offset: offset
                 },
                 method: 'GET'
             };
-            request(reqConfig, function (err, resp, body) {
+            rateLimitRequest(reqConfig, limiter, function (err, resp, body) {
                 if (err) {
                     console.log(err);
                 }
@@ -73,11 +52,10 @@ function loadEtsyFeed (offset, res, cb){
                         deferred.resolve(jsonBody.results);
                     }
                     else {
-                        deferred.reject('No listings available');
+                        deferred.reject(new Error('No listings available'));
                     }
                 }
             });
-
             return deferred.promise;
         })
         .then(function (results) {
@@ -99,49 +77,48 @@ function loadEtsyFeed (offset, res, cb){
                             url: 'https://openapi.etsy.com/v2/listings/' +
                             listing.listing_id + '/images',
                             qs: {
-                                api_key: '9fvuooi2ro6lugj1f554tw68'
+                                api_key: apiKey
                             },
                             method: 'GET'
                         };
 
                         var deferred = Q.defer();
-                        request(reqConfig, function (err, resp, body) {
-                            if (err) {
-                                console.log(err);
-                            }
-                            else {
-                                var jsonBody = JSON.parse(body);
-                                var imageCount = jsonBody.count;
-                                if (imageCount > 0) {
-                                    var imageResult = {};
-                                    if (imageCount > 1) {
-                                        imageResult = jsonBody.results[0];
-                                    }
-                                    else {
-                                        imageResult = jsonBody.results;
-                                    }
-
-                                    var images = [imageResult.url_75x75,
-                                        imageResult.url_170x135,
-                                        imageResult.url_570xN,
-                                        imageResult.fullxfull];
-                                    deferred.resolve({
-                                        title: listing.title,
-                                        images: images,
-                                        description: listing.description,
-                                        price: listing.price,
-                                        currency_code: listing.currency_code
-                                    });
+                        rateLimitRequest(reqConfig, limiter,
+                            function (err, resp, body) {
+                                if (err) {
+                                    console.log(err);
+                                }
+                                else if (body.indexOf('You have') === 0) {
+                                    deferred.reject(new Error(body));
                                 }
                                 else {
-                                    deferred.reject('No images available');
+                                    var jsonBody = JSON.parse(body);
+                                    var imageCount = jsonBody.count;
+                                    if (imageCount > 0) {
+                                        var imageResult = jsonBody.results[0];;
+
+                                        var images = [imageResult.url_75x75,
+                                            imageResult.url_170x135,
+                                            imageResult.url_570xN,
+                                            imageResult.url_fullxfull];
+                                        deferred.resolve({
+                                            id: listing.listing_id,
+                                            title: listing.title,
+                                            images: images,
+                                            description: listing.description,
+                                            price: listing.price,
+                                            currency_code: listing.currency_code
+                                        });
+                                    }
+                                    else {
+                                        deferred.reject(new Error('No images' +
+                                            ' available'));
+                                    }
                                 }
-                            }
-                        });
+                            });
                         return deferred.promise;
                     })
                     .then(function (listing) {
-                        console.log(listing);
                         listings.push(listing);
                     })
                     .then(function () {
@@ -150,7 +127,8 @@ function loadEtsyFeed (offset, res, cb){
                         }
                     })
                     .catch(function (err) {
-                        cb(err);
+                        console.log(err.message);
+                        deferred.reject(err);
                     })
                     .done();
             }
@@ -160,9 +138,41 @@ function loadEtsyFeed (offset, res, cb){
             cb(null, listings);
         })
         .catch(function (err) {
+            console.log(err.message);
             cb(err);
         })
         .done();
+}
+
+function rateLimitRequest(config, limiter, cb) {
+    limiter.removeTokens(1, function () {
+        request(config, cb);
+    });
+}
+
+/** Get from Stackoverflow post
+ *  (http://stackoverflow.com/questions/17217736/while-loop-with-promises)
+ */
+function promiseWhile(condition, body) {
+    var done = Q.defer();
+
+    function loop() {
+        // When the result of calling `condition` is no longer true, we are
+        // done.
+        if (!condition()) return done.resolve();
+        // Use `when`, in case `body` does not return a promise.
+        // When it completes loop again otherwise, if it fails, reject the
+        // done promise
+        Q.when(body(), loop, done.reject);
+    }
+
+    // Start running the loop in the next tick so that this function is
+    // completely async. It would be unexpected if `body` was called
+    // synchronously the first time.
+    Q.nextTick(loop);
+
+    // The promise
+    return done.promise;
 }
 
 module.exports = router;

@@ -2,11 +2,16 @@
  * Created by fanxia on 7/22/15.
  */
 var express = require('express');
-var rp = require('request-promise');
+var request = require('request');
 var RateLimiter = require('limiter').RateLimiter;
 var Q = require('q');
 var _ = require('underscore');
+
+var requestAsync = Q.nbind(request, request);
 var router = express.Router();
+var apiKeys = ['g7gl9ouuxlq1j35aqas99ai4', 'jk9zf5f6why67bgjw34gmaux',
+    '9fvuooi2ro6lugj1f554tw68'];
+var limiters = createLimiters(apiKeys.length);
 
 /**
  * Support n api_key and offset
@@ -21,9 +26,10 @@ router.get('/:feedNum', function (req, res, next) {
     var offset = req.query.offset || 0;
     console.log(feedNum, offset);
 
-    var apiKeys = ['g7gl9ouuxlq1j35aqas99ai4'];
+
     var workerNum = calculateWorkerNum(apiKeys.length, feedNum);
-    getEtsyFeedUsingMultipleWorkers(apiKeys, workerNum, feedNum, offset)
+    getEtsyFeedUsingMultipleWorkers(apiKeys, workerNum, feedNum,
+        offset)
         .then(function (val) {
             res.header('Content-Type', 'application/json');
             res.send({count: val.length, results: val});
@@ -32,7 +38,7 @@ router.get('/:feedNum', function (req, res, next) {
 });
 
 function calculateWorkerNum(apiKeyNum, feedNum) {
-    if (feedNum <= 100) {
+    if (feedNum <= (100 * apiKeyNum)) {
         return apiKeyNum;
     }
     else {
@@ -43,28 +49,15 @@ function calculateWorkerNum(apiKeyNum, feedNum) {
 function getEtsyFeedUsingMultipleWorkers(apiKeys, workerNum, feedNum, offset) {
     var feedPromises = [];
 
-    var apiKeyPromise = getApiKeyAsync(apiKeys);
     var feedNumPerWorker = Math.ceil(feedNum / workerNum);
     var feedNumLastWorker = feedNum - (workerNum - 1) * feedNumPerWorker;
     for (var i = 0; i < workerNum - 1; i++) {
-        var feedPromise = apiKeyPromise.then(function (apiKey) {
-            return getEtsyFeedAsync(apiKey, feedNumPerWorker, offset)
-                .then(function (res) {
-                    apiKeys.push(apiKey);
-                    return res;
-                });
-        });
+        var feedPromise = getEtsyFeedAsync(feedNumPerWorker, offset);
         offset += feedNumPerWorker;
         feedPromises.push(feedPromise);
     }
     // For the last worker
-    var lastFeedPromise = apiKeyPromise.then(function (apiKey) {
-        return getEtsyFeedAsync(apiKey, feedNumLastWorker, offset)
-            .then(function (res) {
-                apiKeys.push(apiKey);
-                return res;
-            });
-    });
+    var lastFeedPromise = getEtsyFeedAsync(feedNumLastWorker, offset);
     feedPromises.push(lastFeedPromise);
     return Q.all(feedPromises).then(function (res) {
         var shallowFaltten = true;
@@ -72,14 +65,20 @@ function getEtsyFeedUsingMultipleWorkers(apiKeys, workerNum, feedNum, offset) {
     });
 }
 
-function getEtsyFeedAsync(apiKey, feedNum, offset) {
-    var limiter = new RateLimiter(1, 150);
-    var listingsPromise = getEtsyListingsAsync(limiter, apiKey, feedNum,
-        offset);
+function getEtsyFeedAsync(feedNum, offset) {
+    var apiKeyAndLimiterPromise = getLimiterAndApiKeyPair();
+    var listingsPromise = apiKeyAndLimiterPromise.then(function (apiKeyAndLimiter) {
+        return getEtsyListingsAsync(apiKeyAndLimiter.limiter,
+            apiKeyAndLimiter.apiKey, feedNum,
+            offset);
+    });
     return listingsPromise.then(function (res) {
         var itemPromises = [];
         res.forEach(function (listing) {
-            itemPromises.push(getItemAsync(limiter, listing, apiKey));
+            itemPromises.push(apiKeyAndLimiterPromise.then(function (apiKeyAndLimiter) {
+                return getItemAsync(apiKeyAndLimiter.limiter, listing,
+                    apiKeyAndLimiter.apiKey)
+            }));
         });
         return Q.all(itemPromises);
     })
@@ -131,6 +130,7 @@ function getEtsyListingsAsync(limiter, apiKey, feedNum, offset) {
         },
         method: 'GET'
     };
+
     return sendRequestAsync(config, limiter)
         .then(function (res) {
             var jsonBody = JSON.parse(res);
@@ -159,27 +159,37 @@ function sendRequestAsync(config, limiter) {
             def.reject(err)
         }
         else {
-            def.resolve(rp(config));
+            def.resolve(requestAsync(config).then(function (res) {
+                console.log(res[0].req.method, res[0].req.path, res[0].statusCode);
+                return res[1];
+            }));
         }
     });
 
     return def.promise;
 }
 
-function getApiKeyAsync(apiKeys) {
-    var gotKey = Q.defer();
-
-    function loop() {
-        if (apiKeys.length > 0) {
-            return gotKey.resolve(apiKeys.shift());
-        }
-
-        Q.when(null, loop, gotKey.reject)
+function createLimiters(num) {
+    var limiters = [];
+    for (var i = 0; i < num; i++) {
+        limiters.push(new RateLimiter(1, 250));
     }
+    return limiters;
+}
 
-    Q.nextTick(loop);
-
-    return gotKey.promise;
+function getLimiterAndApiKeyPair() {
+    var def = Q.defer();
+    if (apiKeys.length > 0 && limiters.length > 0) {
+        var apiKey = apiKeys.shift();
+        var limiter = limiters.shift();
+        def.resolve({limiter: limiter, apiKey: apiKey});
+        apiKeys.push(apiKey);
+        limiters.push(limiter);
+    }
+    else {
+        def.reject(new Error('No api key and limiter pair available.'));
+    }
+    return def.promise;
 }
 
 module.exports = router;

@@ -194,8 +194,8 @@ function sendRequestAsync(config, limiter) {
         }
         else {
             def.resolve(requestAsync(config).then(function (res) {
-                console.log(res[0].req.method, res[0].req.path,
-                    res[0].statusCode);
+                //console.log(res[0].req.method, res[0].req.path,
+                //    res[0].statusCode);
                 if (res[0].statusCode == 200) {
                     return res[1];
                 }

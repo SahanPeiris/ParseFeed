@@ -9,8 +9,28 @@ var _ = require('underscore');
 
 var requestAsync = Q.nbind(request, request);
 var router = express.Router();
-var apiKeys = ['g7gl9ouuxlq1j35aqas99ai4', 'jk9zf5f6why67bgjw34gmaux',
-    '9fvuooi2ro6lugj1f554tw68'];
+var apiKeys = [
+    'g7gl9ouuxlq1j35aqas99ai4',
+    'jk9zf5f6why67bgjw34gmaux',
+    '9fvuooi2ro6lugj1f554tw68',
+    'qnuq6as3m1s8q6oj7edmxo1r',
+    'urenkwm5ue2z2ay6iclyrg14',
+    'zrip6abqkpsa0her1tu1fmb3',
+    'gsen9fw0qhtszjri4psu3lsm',
+    'u2r4qg68us1sm9hwwdg9jkv3',
+    'ohwd0mbhhi868ctk8ju7lr4k',
+    'uy1yqf4h0ghytnuj9fu1b2ml',
+    'bvb5ldczlmo12mxk76isjsk3',
+    '1mljb5pa3oh8mukwhv75s6qp',
+    '3zzq14l7du4gxzi3haqcp01e',
+    'cavou6i8fzuuysysukf27j9u',
+    'du9tqq19t672d5z0ah2wu6ej',
+    '549rcb265456oy1ej58cu5j1',
+    '74drz6jzp5w1znz7x1p0xg81',
+    'dairdcsk5mv481tw7f1qvnrk',
+    '20410s24pp48inhfffcw065v',
+    'zz3byrm5vpor6entir4pfcl2'
+];
 var limiters = createLimiters(apiKeys.length);
 
 /**
@@ -24,8 +44,6 @@ router.get('/', function (req, res, next) {
 router.get('/:feedNum', function (req, res, next) {
     var feedNum = req.params.feedNum;
     var offset = req.query.offset || 0;
-    console.log(feedNum, offset);
-
 
     var workerNum = calculateWorkerNum(apiKeys.length, feedNum);
     getEtsyFeedUsingMultipleWorkers(workerNum, feedNum,
@@ -37,7 +55,7 @@ router.get('/:feedNum', function (req, res, next) {
         .catch(function (err) {
             var rejectedMsg = 'You have exceeded your quota of: 10 requests' +
                 ' per 1 second(s) for public requests.';
-            if(rejectedMsg === err.message){
+            if (rejectedMsg === err.message) {
                 res.send("Request has been rejected, please try again.");
             }
             else {
@@ -48,7 +66,10 @@ router.get('/:feedNum', function (req, res, next) {
 });
 
 function calculateWorkerNum(apiKeyNum, feedNum) {
-    if (feedNum <= (100 * apiKeyNum)) {
+    if (feedNum <= apiKeyNum) {
+        return feedNum;
+    }
+    else if (feedNum <= (100 * apiKeyNum)) {
         return apiKeyNum;
     }
     else {
@@ -67,8 +88,11 @@ function getEtsyFeedUsingMultipleWorkers(workerNum, feedNum, offset) {
         feedPromises.push(feedPromise);
     }
     // For the last worker
-    var lastFeedPromise = getEtsyFeedAsync(feedNumLastWorker, offset);
-    feedPromises.push(lastFeedPromise);
+    if (feedNumLastWorker !== 0) {
+        var lastFeedPromise = getEtsyFeedAsync(feedNumLastWorker, offset);
+        feedPromises.push(lastFeedPromise);
+    }
+
     return Q.all(feedPromises).then(function (res) {
         var shallowFaltten = true;
         return _.flatten(res, shallowFaltten);
@@ -170,8 +194,9 @@ function sendRequestAsync(config, limiter) {
         }
         else {
             def.resolve(requestAsync(config).then(function (res) {
-                //console.log(res[0].req.method, res[0].req.path, res[0].statusCode);
-                if (res[0].statusCode == 200){
+                console.log(res[0].req.method, res[0].req.path,
+                    res[0].statusCode);
+                if (res[0].statusCode == 200) {
                     return res[1];
                 }
                 else {

@@ -28,11 +28,21 @@ router.get('/:feedNum', function (req, res, next) {
 
 
     var workerNum = calculateWorkerNum(apiKeys.length, feedNum);
-    getEtsyFeedUsingMultipleWorkers(apiKeys, workerNum, feedNum,
+    getEtsyFeedUsingMultipleWorkers(workerNum, feedNum,
         offset)
         .then(function (val) {
             res.header('Content-Type', 'application/json');
             res.send({count: val.length, results: val});
+        })
+        .catch(function (err) {
+            var rejectedMsg = 'You have exceeded your quota of: 10 requests' +
+                ' per 1 second(s) for public requests.';
+            if(rejectedMsg === err.message){
+                res.send("Request has been rejected, please try again.");
+            }
+            else {
+                res.send(err.message);
+            }
         })
         .done();
 });
@@ -46,7 +56,7 @@ function calculateWorkerNum(apiKeyNum, feedNum) {
     }
 }
 
-function getEtsyFeedUsingMultipleWorkers(apiKeys, workerNum, feedNum, offset) {
+function getEtsyFeedUsingMultipleWorkers(workerNum, feedNum, offset) {
     var feedPromises = [];
 
     var feedNumPerWorker = Math.ceil(feedNum / workerNum);
@@ -160,8 +170,13 @@ function sendRequestAsync(config, limiter) {
         }
         else {
             def.resolve(requestAsync(config).then(function (res) {
-                console.log(res[0].req.method, res[0].req.path, res[0].statusCode);
-                return res[1];
+                //console.log(res[0].req.method, res[0].req.path, res[0].statusCode);
+                if (res[0].statusCode == 200){
+                    return res[1];
+                }
+                else {
+                    throw new Error(res[1]);
+                }
             }));
         }
     });
@@ -172,7 +187,7 @@ function sendRequestAsync(config, limiter) {
 function createLimiters(num) {
     var limiters = [];
     for (var i = 0; i < num; i++) {
-        limiters.push(new RateLimiter(1, 250));
+        limiters.push(new RateLimiter(1, 200));
     }
     return limiters;
 }

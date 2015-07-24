@@ -1,3 +1,4 @@
+'use strict';
 /**
  * Created by fanxia on 7/22/15.
  */
@@ -42,8 +43,8 @@ router.get('/', function (req, res, next) {
 });
 
 router.get('/:feedNum', function (req, res, next) {
-    var feedNum = req.params.feedNum;
-    var offset = req.query.offset || 0;
+    var feedNum = parseInt(req.params.feedNum);
+    var offset = parseInt(req.query.offset || 0);
 
     var workerNum = calculateWorkerNum(apiKeys.length, feedNum);
     getEtsyFeedUsingMultipleWorkers(workerNum, feedNum,
@@ -194,8 +195,8 @@ function sendRequestAsync(config, limiter) {
         }
         else {
             def.resolve(requestAsync(config).then(function (res) {
-                //console.log(res[0].req.method, res[0].req.path,
-                //    res[0].statusCode);
+                console.log(res[0].req.method, res[0].req.path,
+                    res[0].statusCode);
                 if (res[0].statusCode == 200) {
                     return res[1];
                 }
